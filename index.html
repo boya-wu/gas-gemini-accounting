@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: sans-serif; padding: 15px; display: flex; flex-direction: column; align-items: center; background: #fafafa; }
+    .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
+    #result { width: 100%; margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    td { padding: 10px 2px; border-bottom: 1px solid #eee; }
+    .loading { color: #f39c12; font-weight: bold; text-align: center; padding: 20px; }
+    .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; margin-top: 10px; font-weight: bold; }
+    .btn-primary { background: #4285f4; color: white; }
+    .btn-outline { background: white; color: #4285f4; border: 2px solid #4285f4; padding: 10px; }
+    .btn-success { background: #34a853; color: white; }
+    .btn-manual { background: #673ab7; color: white; }
+    .btn-danger { background: #ea4335; color: white; padding: 5px 10px; border-radius: 4px; font-size: 14px; }
+    select, input[type="text"], input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
+    .budget-box { background: #fff; padding: 10px; border-radius: 8px; flex: 1; text-align: center; border: 1px solid #eee; }
+    .item-row input { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div id="budgetStatus" style="width: 100%; max-width: 400px; display: flex; justify-content: space-between; margin-bottom: 15px; gap: 10px;">
+    <div class="budget-box" style="border-left: 5px solid #34a853;"><small>吳 剩餘</small><br><b id="wuBudget">...</b></div>
+    <div class="budget-box" style="border-left: 5px solid #fbbc05;"><small>巫 剩餘</small><br><b id="witchBudget">...</b></div>
+  </div>
+
+  <div class="card" id="mainCard">
+    <h3 style="margin-top:0;">💰 智慧記帳</h3>
+    <input type="file" id="imageInput" accept="image/*" style="display:none;" onchange="autoUpload(this)">
+    <button class="btn btn-primary" onclick="document.getElementById('imageInput').click()">📸 拍照 / 選擇相片</button>
+    <button class="btn btn-manual" onclick="startManualEntry()">⚡ 手動新增</button>
+    <div id="result">
+      <p style="color: #999; text-align: center; font-size: 14px;">請選擇操作開始記帳</p>
+    </div>
+  </div>
+
+<script>
+  let currentParsedData = null;
+
+  function updateBudgets() {
+    google.script.run.withSuccessHandler(res => {
+      document.getElementById('wuBudget').innerText = '$' + res.wu;
+      document.getElementById('witchBudget').innerText = '$' + res.witch;
+    }).getBudgetSummary();
+  }
+
+  // 🔹 修改後的 resetUI：重新渲染整個 Card，確保元件都存在
+  function resetUI() {
+    document.getElementById('mainCard').innerHTML = `
+      <h3 style="margin-top:0;">💰 智慧記帳</h3>
+      <input type="file" id="imageInput" accept="image/*" style="display:none;" onchange="autoUpload(this)">
+      <button class="btn btn-primary" onclick="document.getElementById('imageInput').click()">📸 拍照 / 選擇相片</button>
+      <button class="btn btn-manual" onclick="startManualEntry()">⚡ 高效率手動新增</button>
+      <div id="result">
+        <p style="color: #999; text-align: center; font-size: 14px;">請選擇操作開始記帳</p>
+      </div>
+    `;
+    currentParsedData = null;
+    updateBudgets();
+  }
+
+  function autoUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const resultDiv = document.getElementById('result');
+    resultDiv.innerHTML = '<div class="loading">AI 辨識中...⏳</div>';
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64 = e.target.result;
+      google.script.run
+        .withSuccessHandler(jsonStr => { renderItems(jsonStr); })
+        .withFailureHandler(err => { resultDiv.innerText = "解析失敗: " + err; })
+        .analyzeReceipt(base64);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function startManualEntry() {
+    const today = new Date().toISOString().split('T')[0];
+    const emptyData = { store: "", date: today, totalAmount: 0, items: [{ name: "", price: 0 }] };
+    renderItems(JSON.stringify(emptyData));
+  }
+
+  function renderItems(jsonStr) {
+    const data = JSON.parse(jsonStr);
+    currentParsedData = data;
+    
+    let html = `
+      <div style="border-top: 2px solid #eee; margin-top: 15px; padding-top: 15px;">
+        <input type="text" id="editStore" value="${data.store || ''}" placeholder="商店名稱" style="margin-bottom:8px;">
+        <input type="date" id="editDate" value="${(data.date || '').replace(/\//g, '-')}" style="margin-bottom:8px;">
+        <div style="background: #e8f0fe; padding: 10px; border-radius: 8px; margin: 10px 0;">
+          <label style="font-size: 14px;">💰 誰先墊錢？</label>
+          <select id="finalPayer"><option value="吳">吳</option><option value="巫">巫</option></select>
+        </div>
+      </div>
+      <table id="itemTable">
+    `;
+    
+    data.items.forEach((item, index) => {
+      html += createRowHtml(item.name, item.price, item.owner);
+    });
+    
+    html += '</table>';
+    html += `<button class="btn btn-outline" onclick="addRow()" style="margin-top:10px;">➕ 新增品項</button>`;
+    html += `<div style="margin-top:15px; text-align:right; font-weight:bold; font-size: 1.2em;">總計: $<span id="displayTotal">${data.totalAmount || 0}</span></div>`;
+    html += `<button class="btn btn-success" onclick="finalSubmit()">確認並存入</button>`;
+    
+    document.getElementById('result').innerHTML = html;
+    calcTotal();
+  }
+
+  function createRowHtml(name = "", price = 0, owner = "共同") {
+    return `
+      <tr class="item-row">
+        <td>
+          <input type="text" placeholder="品項" class="i-name" value="${name}">
+          <input type="number" placeholder="金額" class="i-price" value="${price}" onchange="calcTotal()">
+        </td>
+        <td style="width: 85px; text-align: right; vertical-align: top;">
+          <select class="i-owner" style="margin-bottom:5px;">
+            <option value="共同" ${owner==='共同'?'selected':''}>共同</option>
+            <option value="吳" ${owner==='吳'?'selected':''}>吳</option>
+            <option value="巫" ${owner==='巫'?'selected':''}>巫</option>
+          </select>
+          <button class="btn-danger" onclick="removeRow(this)">🗑️</button>
+        </td>
+      </tr>`;
+  }
+
+  function addRow() {
+    const table = document.getElementById('itemTable');
+    table.insertAdjacentHTML('beforeend', createRowHtml());
+  }
+
+  function removeRow(btn) {
+    if (confirm("確定要刪除此品項嗎？")) {
+      btn.closest('.item-row').remove();
+      calcTotal();
+    }
+  }
+
+  function calcTotal() {
+    let total = 0;
+    document.querySelectorAll('.i-price').forEach(input => {
+      total += Number(input.value || 0);
+    });
+    document.getElementById('displayTotal').innerText = total;
+  }
+
+  function finalSubmit() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerText = "儲存中...";
+
+    const items = [];
+    document.querySelectorAll('.item-row').forEach(row => {
+      const name = row.querySelector('.i-name').value;
+      const price = Number(row.querySelector('.i-price').value);
+      if (name || price) {
+        items.push({ name, price, owner: row.querySelector('.i-owner').value });
+      }
+    });
+
+    // --- 修正日期與時間邏輯 ---
+    const dateVal = document.getElementById('editDate').value; // 取得 "2026-03-07"
+    const now = new Date();
+    const dateObj = new Date(dateVal);
+    
+    // 將目前當下的 時:分:秒 注入到選擇的日期中
+    dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+    // -----------------------
+
+    const finalData = {
+      store: document.getElementById('editStore').value,
+      date: dateObj.toString(), // 傳送包含完整時間資訊的字串
+      totalAmount: Number(document.getElementById('displayTotal').innerText),
+      payer: document.getElementById('finalPayer').value,
+      items: items
+    };
+
+    google.script.run
+      .withSuccessHandler(msg => {
+        document.getElementById('mainCard').innerHTML = `
+          <div style="text-align:center; padding: 20px;">
+            <h2 style="color:#34a853;">✅ 儲存成功</h2>
+            <button onclick="resetUI()" class="btn btn-primary">回首頁記帳</button>
+          </div>`;
+      })
+      .withFailureHandler(err => {
+        alert("儲存失敗: " + err);
+        btn.disabled = false;
+        btn.innerText = "重新儲存";
+      })
+      .processFinalSave(finalData);
+  }
+  
+  window.onload = updateBudgets;
+</script>
+</body>
+</html>
